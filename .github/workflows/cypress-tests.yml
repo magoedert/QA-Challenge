@@ -271,10 +271,10 @@ jobs:
 
       - name: Build e executar testes com Docker
         run: |
-          docker-compose up --build -d
-          docker-compose run --rm cypress
+          docker compose up --build -d
+          docker compose run --rm cypress
           EXIT_CODE=$?
-          docker-compose down
+          docker compose down
           exit $EXIT_CODE
 
       - name: Copiar resultados do container (se falhar)

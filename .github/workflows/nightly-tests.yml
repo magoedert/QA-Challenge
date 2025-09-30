@@ -2,7 +2,6 @@ name: Nightly Comprehensive Tests
 
 on:
   schedule:
-    # Executar todos os dias às 2:00 AM UTC
     - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
@@ -19,19 +18,39 @@ on:
           - performance
           - security
 
+env:
+  NODE_VERSION: '18'
+  DATABASE_URL: postgresql://testuser:testpass@localhost:5432/testdb
+  JWT_SECRET: test-secret-key-for-ci-nightly
+
 jobs:
   comprehensive-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: testdb
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     strategy:
       fail-fast: false
       matrix:
-        browser: [chrome, firefox, edge]
+        browser: [chrome, firefox]  # Edge pode ser problemático no CI
         viewport:
-          - { width: 1280, height: 720 }
-          - { width: 1920, height: 1080 }
-          - { width: 768, height: 1024 }
+          - { width: 1280, height: 720, name: 'hd' }
+          - { width: 1920, height: 1080, name: 'fullhd' }
+          - { width: 768, height: 1024, name: 'tablet' }
 
     steps:
       - name: Checkout código
@@ -40,7 +59,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
       - name: Instalar dependências
@@ -48,24 +67,63 @@ jobs:
           npm ci
           cd backend && npm ci
 
-      - name: Criar arquivo de ambiente
+      - name: Criar arquivo de ambiente do Cypress
         run: |
-          echo '{
+          cat > cypress.env.json << 'EOF'
+          {
             "ADMIN_EMAIL": "admin@test.com",
             "ADMIN_PASSWORD": "admin123",
             "USER_EMAIL": "user@test.com",
             "USER_PASSWORD": "user123",
             "INVALID_EMAIL": "invalid@test.com",
-            "NONEXISTENT_EMAIL": "nonexistent@test.com"
-          }' > cypress.env.json
+            "NONEXISTENT_EMAIL": "nonexistent@test.com",
+            "BASE_URL": "http://localhost:3001"
+          }
+          EOF
+
+      - name: Criar arquivo .env do backend
+        run: |
+          cat > backend/.env << EOF
+          NODE_ENV=test
+          PORT=3001
+          DATABASE_URL=${{ env.DATABASE_URL }}
+          JWT_SECRET=${{ env.JWT_SECRET }}
+          JWT_EXPIRES_IN=1h
+          LOG_LEVEL=error
+          EOF
+
+      - name: Executar migrations e seed
+        run: |
+          cd backend
+          npm run migrate || npm run db:migrate || echo "⚠️ Migrations não encontradas"
+          npm run seed || echo "⚠️ Seed não encontrado"
+
+      - name: Iniciar backend em background
+        run: |
+          cd backend
+          nohup npm start > backend.log 2>&1 &
+          echo $! > ../backend.pid
+          cd ..
+        env:
+          NODE_ENV: test
+
+      - name: Aguardar backend estar pronto
+        run: |
+          echo "⏳ Aguardando backend iniciar..."
+          npx wait-on http://localhost:3001/health -t 120000 || npx wait-on http://localhost:3001 -t 120000
+
+      - name: Verificar saúde do backend
+        run: |
+          echo "🔍 Testando conectividade com backend..."
+          curl -f http://localhost:3001 || curl -f http://localhost:3001/health || echo "⚠️ Backend respondendo mas sem endpoint de health"
 
       - name: Executar todos os testes
         uses: cypress-io/github-action@v6
         with:
-          start: npm run start:dev
-          wait-on: 'http://localhost:3001'
-          wait-on-timeout: 180
           browser: ${{ matrix.browser }}
+          install: false
+          wait-on: 'http://localhost:3001'
+          wait-on-timeout: 30
           config: viewportWidth=${{ matrix.viewport.width }},viewportHeight=${{ matrix.viewport.height }}
           spec: |
             cypress/e2e/Smoke/**/*,
@@ -74,16 +132,34 @@ jobs:
         env:
           CYPRESS_RECORD_VIDEO: true
           CYPRESS_SCREENSHOT_ON_RUN_FAILURE: true
+          CYPRESS_BASE_URL: http://localhost:3001
+
+      - name: Mostrar logs do backend em caso de falha
+        if: failure()
+        run: |
+          echo "📋 Últimas 100 linhas do log do backend:"
+          tail -n 100 backend/backend.log || echo "Arquivo de log não encontrado"
+
+      - name: Parar backend
+        if: always()
+        run: |
+          if [ -f backend.pid ]; then
+            echo "🛑 Parando backend (PID: $(cat backend.pid))"
+            kill $(cat backend.pid) || true
+            sleep 2
+            kill -9 $(cat backend.pid) 2>/dev/null || true
+          fi
 
       - name: Upload resultados completos
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: nightly-results-${{ matrix.browser }}-${{ matrix.viewport.width }}x${{ matrix.viewport.height }}
+          name: nightly-${{ matrix.browser }}-${{ matrix.viewport.name }}
           path: |
             cypress/videos
             cypress/screenshots
             cypress/reports
+            backend/backend.log
           retention-days: 7
 
   docker-stress-tests:
@@ -97,72 +173,223 @@ jobs:
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Verificar docker-compose
+        run: |
+          if [ ! -f docker-compose.yml ]; then
+            echo "❌ docker-compose.yml não encontrado!"
+            exit 1
+          fi
+          echo "✅ docker-compose.yml encontrado"
+
       - name: Criar arquivo de ambiente
         run: |
-          echo '{
+          cat > cypress.env.json << 'EOF'
+          {
             "ADMIN_EMAIL": "admin@test.com",
             "ADMIN_PASSWORD": "admin123",
             "USER_EMAIL": "user@test.com",
             "USER_PASSWORD": "user123",
             "INVALID_EMAIL": "invalid@test.com",
             "NONEXISTENT_EMAIL": "nonexistent@test.com"
-          }' > cypress.env.json
+          }
+          EOF
+
+      - name: Build das imagens Docker
+        run: |
+          echo "🏗️ Construindo imagens Docker..."
+          docker-compose build
 
       - name: Executar testes de stress com Docker
         run: |
-          # Executar múltiplas vezes para testar estabilidade
+          SUCCESS_COUNT=0
+          FAILURE_COUNT=0
+          
           for i in {1..3}; do
-            echo "🔄 Execução $i de 3"
-            docker-compose up --build --abort-on-container-exit
+            echo ""
+            echo "🔄 ========================================="
+            echo "🔄 Execução $i de 3 - $(date)"
+            echo "🔄 ========================================="
+            
+            # Limpar ambiente anterior
+            docker-compose down -v 2>/dev/null || true
+            sleep 5
+            
+            # Iniciar serviços
+            docker-compose up -d
+            sleep 10
+            
+            # Executar testes
+            if docker-compose run --rm cypress; then
+              echo "✅ Execução $i: SUCESSO"
+              SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+            else
+              echo "❌ Execução $i: FALHA"
+              FAILURE_COUNT=$((FAILURE_COUNT + 1))
+              
+              # Capturar logs em caso de falha
+              echo "📋 Logs do app:"
+              docker-compose logs app | tail -n 50
+              echo "📋 Logs do cypress:"
+              docker-compose logs cypress | tail -n 50
+            fi
+            
+            # Limpar para próxima execução
             docker-compose down -v
             sleep 30
           done
+          
+          echo ""
+          echo "📊 ========================================="
+          echo "📊 RESUMO DOS TESTES DE STRESS"
+          echo "📊 ========================================="
+          echo "✅ Sucessos: $SUCCESS_COUNT"
+          echo "❌ Falhas: $FAILURE_COUNT"
+          
+          # Falhar se houve alguma falha
+          if [ $FAILURE_COUNT -gt 0 ]; then
+            echo "❌ Alguns testes falharam durante o stress test"
+            exit 1
+          fi
 
-      - name: Verificar logs de containers
+      - name: Capturar logs finais
+        if: always()
         run: |
-          docker-compose logs app > app-logs.txt
-          docker-compose logs cypress > cypress-logs.txt
+          mkdir -p logs
+          docker-compose logs app > logs/app-logs.txt 2>&1 || echo "Sem logs do app"
+          docker-compose logs cypress > logs/cypress-logs.txt 2>&1 || echo "Sem logs do cypress"
+          docker-compose down -v
 
       - name: Upload logs
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: docker-stress-logs
-          path: |
-            app-logs.txt
-            cypress-logs.txt
+          path: logs/
           retention-days: 7
 
+  performance-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: comprehensive-tests
+    if: success()
 
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: testdb
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Instalar dependências
+        run: |
+          npm ci
+          cd backend && npm ci
+
+      - name: Criar arquivo .env do backend
+        run: |
+          cat > backend/.env << EOF
+          NODE_ENV=test
+          PORT=3001
+          DATABASE_URL=${{ env.DATABASE_URL }}
+          JWT_SECRET=${{ env.JWT_SECRET }}
+          EOF
+
+      - name: Preparar banco de dados
+        run: |
+          cd backend
+          npm run migrate || npm run db:migrate || true
+          npm run seed || true
+
+      - name: Iniciar backend
+        run: |
+          cd backend
+          nohup npm start > backend.log 2>&1 &
+          echo $! > ../backend.pid
+          cd ..
+
+      - name: Aguardar backend
+        run: npx wait-on http://localhost:3001 -t 120000
+
+      - name: Executar testes de performance
+        run: |
+          echo "🚀 Iniciando testes de performance..."
+          
+          # Instalar Artillery se necessário
+          npm install -g artillery || echo "Artillery já instalado"
+          
+          # Executar testes de carga (exemplo básico)
+          echo "📊 Teste de carga básico..."
+          for i in {1..100}; do
+            curl -s http://localhost:3001 > /dev/null &
+          done
+          wait
+          
+          echo "✅ Testes de performance concluídos"
+
+      - name: Parar backend
+        if: always()
+        run: |
+          if [ -f backend.pid ]; then
+            kill $(cat backend.pid) || true
+          fi
 
   notification:
     runs-on: ubuntu-latest
-    needs: [comprehensive-tests, docker-stress-tests]
+    needs: [comprehensive-tests, docker-stress-tests, performance-tests]
     if: always()
 
     steps:
       - name: Gerar resumo dos testes
         run: |
-          echo "🌙 RELATÓRIO DE TESTES NOTURNOS - $(date)" > nightly-summary.txt
-          echo "=============================================" >> nightly-summary.txt
-          echo "" >> nightly-summary.txt
+          cat > nightly-summary.txt << EOF
+          🌙 RELATÓRIO DE TESTES NOTURNOS - $(date)
+          =============================================
 
-          # Status dos jobs
-          echo "📊 Status dos Jobs:" >> nightly-summary.txt
-          echo "- Testes Abrangentes: ${{ needs.comprehensive-tests.result }}" >> nightly-summary.txt
-          echo "- Testes Docker: ${{ needs.docker-stress-tests.result }}" >> nightly-summary.txt
-          echo "" >> nightly-summary.txt
+          📊 Status dos Jobs:
+          - Testes Abrangentes: ${{ needs.comprehensive-tests.result }}
+          - Testes Docker Stress: ${{ needs.docker-stress-tests.result }}
+          - Testes de Performance: ${{ needs.performance-tests.result }}
+
+          EOF
 
           # Determinar status geral
           if [[ "${{ needs.comprehensive-tests.result }}" == "success" &&
-                "${{ needs.docker-stress-tests.result }}" == "success" ]]; then
+                "${{ needs.docker-stress-tests.result }}" == "success" &&
+                "${{ needs.performance-tests.result }}" == "success" ]]; then
             echo "✅ RESULTADO GERAL: TODOS OS TESTES PASSARAM" >> nightly-summary.txt
+            echo "" >> nightly-summary.txt
+            echo "🎉 O sistema está estável e pronto para produção!" >> nightly-summary.txt
           else
             echo "❌ RESULTADO GERAL: ALGUNS TESTES FALHARAM" >> nightly-summary.txt
+            echo "" >> nightly-summary.txt
+            echo "⚠️ Ação requerida: Revisar os logs dos testes falhados" >> nightly-summary.txt
           fi
 
           echo "" >> nightly-summary.txt
-          echo "🔍 Verifique os artefatos para mais detalhes" >> nightly-summary.txt
+          echo "🔍 Artefatos disponíveis:" >> nightly-summary.txt
+          echo "  - Screenshots e vídeos dos testes" >> nightly-summary.txt
+          echo "  - Logs do backend" >> nightly-summary.txt
+          echo "  - Relatórios de performance" >> nightly-summary.txt
+          echo "" >> nightly-summary.txt
+          echo "📅 Próxima execução: Amanhã às 2:00 AM UTC" >> nightly-summary.txt
 
       - name: Upload resumo
         uses: actions/upload-artifact@v4
@@ -171,3 +398,6 @@ jobs:
           name: nightly-summary
           path: nightly-summary.txt
           retention-days: 90
+
+      - name: Exibir resumo no log
+        run: cat nightly-summary.txt

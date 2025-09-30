@@ -1,0 +1,172 @@
+name: Nightly Comprehensive Tests
+
+on:
+  schedule:
+    # Executar todos os dias às 2:00 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      test_suite:
+        description: 'Suite de testes para executar'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - smoke
+          - e2e
+          - api
+          - performance
+          - security
+
+jobs:
+  comprehensive-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chrome, firefox, edge]
+        viewport:
+          - { width: 1280, height: 720 }
+          - { width: 1920, height: 1080 }
+          - { width: 768, height: 1024 }
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Criar arquivo de ambiente
+        run: |
+          echo '{
+            "ADMIN_EMAIL": "admin@test.com",
+            "ADMIN_PASSWORD": "admin123",
+            "USER_EMAIL": "user@test.com",
+            "USER_PASSWORD": "user123",
+            "INVALID_EMAIL": "invalid@test.com",
+            "NONEXISTENT_EMAIL": "nonexistent@test.com"
+          }' > cypress.env.json
+
+      - name: Executar todos os testes
+        uses: cypress-io/github-action@v6
+        with:
+          build: npm run build
+          start: npm run start:dev
+          wait-on: 'http://localhost:3001'
+          wait-on-timeout: 180
+          browser: ${{ matrix.browser }}
+          config: viewportWidth=${{ matrix.viewport.width }},viewportHeight=${{ matrix.viewport.height }}
+          spec: |
+            cypress/e2e/Smoke/**/*,
+            cypress/e2e/Login/**/*,
+            cypress/e2e/API/**/*
+        env:
+          CYPRESS_RECORD_VIDEO: true
+          CYPRESS_SCREENSHOT_ON_RUN_FAILURE: true
+
+      - name: Upload resultados completos
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nightly-results-${{ matrix.browser }}-${{ matrix.viewport.width }}x${{ matrix.viewport.height }}
+          path: |
+            cypress/videos
+            cypress/screenshots
+            cypress/reports
+          retention-days: 7
+
+  docker-stress-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Criar arquivo de ambiente
+        run: |
+          echo '{
+            "ADMIN_EMAIL": "admin@test.com",
+            "ADMIN_PASSWORD": "admin123",
+            "USER_EMAIL": "user@test.com",
+            "USER_PASSWORD": "user123",
+            "INVALID_EMAIL": "invalid@test.com",
+            "NONEXISTENT_EMAIL": "nonexistent@test.com"
+          }' > cypress.env.json
+
+      - name: Executar testes de stress com Docker
+        run: |
+          # Executar múltiplas vezes para testar estabilidade
+          for i in {1..3}; do
+            echo "🔄 Execução $i de 3"
+            docker-compose up --build --abort-on-container-exit
+            docker-compose down -v
+            sleep 30
+          done
+
+      - name: Verificar logs de containers
+        run: |
+          docker-compose logs app > app-logs.txt
+          docker-compose logs cypress > cypress-logs.txt
+
+      - name: Upload logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: docker-stress-logs
+          path: |
+            app-logs.txt
+            cypress-logs.txt
+          retention-days: 7
+
+
+
+  notification:
+    runs-on: ubuntu-latest
+    needs: [comprehensive-tests, docker-stress-tests]
+    if: always()
+
+    steps:
+      - name: Gerar resumo dos testes
+        run: |
+          echo "🌙 RELATÓRIO DE TESTES NOTURNOS - $(date)" > nightly-summary.txt
+          echo "=============================================" >> nightly-summary.txt
+          echo "" >> nightly-summary.txt
+
+          # Status dos jobs
+          echo "📊 Status dos Jobs:" >> nightly-summary.txt
+          echo "- Testes Abrangentes: ${{ needs.comprehensive-tests.result }}" >> nightly-summary.txt
+          echo "- Testes Docker: ${{ needs.docker-stress-tests.result }}" >> nightly-summary.txt
+          echo "" >> nightly-summary.txt
+
+          # Determinar status geral
+          if [[ "${{ needs.comprehensive-tests.result }}" == "success" &&
+                "${{ needs.docker-stress-tests.result }}" == "success" ]]; then
+            echo "✅ RESULTADO GERAL: TODOS OS TESTES PASSARAM" >> nightly-summary.txt
+          else
+            echo "❌ RESULTADO GERAL: ALGUNS TESTES FALHARAM" >> nightly-summary.txt
+          fi
+
+          echo "" >> nightly-summary.txt
+          echo "🔍 Verifique os artefatos para mais detalhes" >> nightly-summary.txt
+
+      - name: Upload resumo
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nightly-summary
+          path: nightly-summary.txt
+          retention-days: 90

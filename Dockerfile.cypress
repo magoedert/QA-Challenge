@@ -1,0 +1,29 @@
+# Dockerfile para Cypress
+FROM cypress/included:13.6.2
+
+# Definir diretório de trabalho
+WORKDIR /e2e
+
+# Copiar arquivos de configuração
+COPY package*.json ./
+COPY cypress.config.js ./
+
+# Instalar dependências
+RUN npm install
+
+# Copiar código dos testes
+COPY cypress/ ./cypress/
+
+# Copiar arquivos de configuração de ambiente (sem dados sensíveis)
+COPY cypress.env.example.json ./cypress.env.json
+
+# Criar diretórios para reports
+RUN mkdir -p cypress/reports cypress/videos cypress/screenshots
+
+# Definir variáveis de ambiente padrão
+ENV CYPRESS_baseUrl=http://app:3001
+ENV CYPRESS_video=true
+ENV CYPRESS_screenshotOnRunFailure=true
+
+# Comando padrão
+CMD ["cypress", "run"]

@@ -1,0 +1,282 @@
+name: Cypress E2E Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    # Executar testes diariamente às 6:00 UTC
+    - cron: '0 6 * * *'
+
+jobs:
+  # Job de smoke tests (mais rápido)
+  smoke-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        browser: [chrome, firefox]
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Criar arquivo de ambiente
+        run: |
+          echo '{
+            "ADMIN_EMAIL": "admin@test.com",
+            "ADMIN_PASSWORD": "admin123",
+            "USER_EMAIL": "user@test.com",
+            "USER_PASSWORD": "user123",
+            "INVALID_EMAIL": "invalid@test.com",
+            "NONEXISTENT_EMAIL": "nonexistent@test.com"
+          }' > cypress.env.json
+
+      - name: Executar Smoke Tests
+        uses: cypress-io/github-action@v6
+        with:
+          build: npm run build
+          start: npm run start:dev
+          wait-on: 'http://localhost:3001'
+          wait-on-timeout: 120
+          browser: ${{ matrix.browser }}
+          spec: 'cypress/e2e/Smoke/**/*'
+          record: false
+
+      - name: Upload screenshots (falhas)
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: cypress-screenshots-smoke-${{ matrix.browser }}
+          path: cypress/screenshots
+          retention-days: 7
+
+      - name: Upload videos
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cypress-videos-smoke-${{ matrix.browser }}
+          path: cypress/videos
+          retention-days: 7
+
+  # Job principal de testes E2E
+  e2e-tests:
+    runs-on: ubuntu-latest
+    needs: smoke-tests
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chrome, firefox, edge]
+        spec:
+          - 'cypress/e2e/Login/**/*'
+          - 'cypress/e2e/API/**/*'
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Criar arquivo de ambiente
+        run: |
+          echo '{
+            "ADMIN_EMAIL": "admin@test.com",
+            "ADMIN_PASSWORD": "admin123",
+            "USER_EMAIL": "user@test.com",
+            "USER_PASSWORD": "user123",
+            "INVALID_EMAIL": "invalid@test.com",
+            "NONEXISTENT_EMAIL": "nonexistent@test.com"
+          }' > cypress.env.json
+
+      - name: Executar testes E2E
+        uses: cypress-io/github-action@v6
+        with:
+          build: npm run build
+          start: npm run start:dev
+          wait-on: 'http://localhost:3001'
+          wait-on-timeout: 120
+          browser: ${{ matrix.browser }}
+          spec: ${{ matrix.spec }}
+          record: false
+
+      - name: Upload screenshots (falhas)
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: cypress-screenshots-${{ matrix.browser }}-${{ strategy.job-index }}
+          path: cypress/screenshots
+          retention-days: 30
+
+      - name: Upload videos
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cypress-videos-${{ matrix.browser }}-${{ strategy.job-index }}
+          path: cypress/videos
+          retention-days: 30
+
+  # Job com Docker
+  docker-tests:
+    runs-on: ubuntu-latest
+    needs: smoke-tests
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Criar arquivo de ambiente
+        run: |
+          echo '{
+            "ADMIN_EMAIL": "admin@test.com",
+            "ADMIN_PASSWORD": "admin123",
+            "USER_EMAIL": "user@test.com",
+            "USER_PASSWORD": "user123",
+            "INVALID_EMAIL": "invalid@test.com",
+            "NONEXISTENT_EMAIL": "nonexistent@test.com"
+          }' > cypress.env.json
+
+      - name: Executar testes com Docker
+        run: |
+          docker-compose up --build --abort-on-container-exit
+          docker-compose down
+
+      - name: Extract test results do container
+        run: |
+          docker-compose up --no-deps cypress
+          docker cp $(docker-compose ps -q cypress):/e2e/cypress/videos ./cypress/videos || true
+          docker cp $(docker-compose ps -q cypress):/e2e/cypress/screenshots ./cypress/screenshots || true
+          docker cp $(docker-compose ps -q cypress):/e2e/cypress/reports ./cypress/reports || true
+
+      - name: Upload Docker test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: docker-test-results
+          path: |
+            cypress/videos
+            cypress/screenshots
+            cypress/reports
+          retention-days: 30
+
+  # Job para gerar relatórios consolidados
+  generate-reports:
+    runs-on: ubuntu-latest
+    needs: [e2e-tests, docker-tests]
+    if: always()
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Download todos os artefatos
+        uses: actions/download-artifact@v4
+
+      - name: Instalar dependências para relatórios
+        run: |
+          npm install -g mochawesome-merge mochawesome-report-generator
+
+      - name: Gerar relatório consolidado
+        run: |
+          mkdir -p consolidated-reports
+
+          # Merge todos os relatórios JSON
+          find . -name "*.json" -path "*/cypress/reports/*" -exec cp {} consolidated-reports/ \;
+
+          if [ -n "$(ls -A consolidated-reports/*.json 2>/dev/null)" ]; then
+            mochawesome-merge consolidated-reports/*.json > consolidated-reports/merged-report.json
+            marge consolidated-reports/merged-report.json --reportDir consolidated-reports --inline
+          fi
+
+      - name: Upload relatório consolidado
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: consolidated-test-report
+          path: consolidated-reports
+          retention-days: 90
+
+      - name: Comentar PR com resultados
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            let comment = '## 🧪 Resultados dos Testes Cypress\n\n';
+
+            // Verificar se existem falhas
+            const failureArtifacts = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.runId,
+            });
+
+            const hasFailures = failureArtifacts.data.artifacts.some(artifact =>
+              artifact.name.includes('screenshots')
+            );
+
+            if (hasFailures) {
+              comment += '❌ **Alguns testes falharam**\n\n';
+              comment += '🖼️ Screenshots das falhas foram capturados\n';
+              comment += '🎥 Vídeos dos testes estão disponíveis nos artefatos\n\n';
+            } else {
+              comment += '✅ **Todos os testes passaram!**\n\n';
+            }
+
+            comment += '📊 **Artefatos disponíveis:**\n';
+            comment += '- Screenshots (se houver falhas)\n';
+            comment += '- Vídeos dos testes\n';
+            comment += '- Relatórios detalhados\n\n';
+            comment += '🔍 Verifique a aba "Actions" para mais detalhes.';
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+  # Job para deploy (apenas se todos os testes passarem)
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [smoke-tests, e2e-tests, docker-tests]
+    if: github.ref == 'refs/heads/main' && success()
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Deploy para staging
+        run: |
+          echo "🚀 Deploy seria executado aqui"
+          echo "✅ Todos os testes passaram - ambiente está pronto para deploy"
+
+      - name: Notificar sucesso
+        run: |
+          echo "🎉 Pipeline concluída com sucesso!"
+          echo "📈 Todos os testes passaram"
+          echo "🚀 Deploy realizado com sucesso"

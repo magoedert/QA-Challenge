@@ -1,7 +1,76 @@
+version: '3.8'
+
 services:
-  web:
+  # Aplicação principal
+  app:
     build: .
     ports:
-      - "3001:3000"
+      - "3001:3001"
     environment:
-      - NODE_ENV=production
+      - NODE_ENV=test
+      - PORT=3001
+    networks:
+      - e2e-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Testes Cypress
+  cypress:
+    build:
+      context: .
+      dockerfile: Dockerfile.cypress
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      - CYPRESS_baseUrl=http://app:3001
+      - CYPRESS_video=true
+      - CYPRESS_screenshotOnRunFailure=true
+      - CYPRESS_viewportWidth=1280
+      - CYPRESS_viewportHeight=720
+    volumes:
+      - ./cypress/videos:/e2e/cypress/videos
+      - ./cypress/screenshots:/e2e/cypress/screenshots
+      - ./cypress/reports:/e2e/cypress/reports
+    networks:
+      - e2e-network
+    command: >
+      sh -c "
+        echo 'Aguardando aplicação estar disponível...' &&
+        npx wait-on http://app:3001 --timeout 60000 &&
+        echo 'Executando testes...' &&
+        cypress run --record false --reporter mochawesome --reporter-options 'reportDir=cypress/reports,overwrite=false,html=true,json=true'
+      "
+
+  # Cypress interativo (para desenvolvimento)
+  cypress-open:
+    build:
+      context: .
+      dockerfile: Dockerfile.cypress
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      - CYPRESS_baseUrl=http://app:3001
+      - DISPLAY=$DISPLAY
+    volumes:
+      - ./cypress:/e2e/cypress
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    networks:
+      - e2e-network
+    profiles:
+      - dev
+    command: cypress open
+
+networks:
+  e2e-network:
+    driver: bridge
+
+volumes:
+  cypress-videos:
+  cypress-screenshots:
+  cypress-reports:

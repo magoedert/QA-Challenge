@@ -1,0 +1,34 @@
+{
+  "validUsers": {
+    "admin": {
+      "email": "admin@test.com",
+      "password": "admin123",
+      "expectedName": "Admin",
+      "role": "admin"
+    },
+    "user": {
+      "email": "user@test.com",
+      "password": "user123",
+      "role": "user"
+    }
+  },
+  "invalidUsers": {
+    "invalidEmail": {
+      "email": "invalid@test.com",
+      "password": "wrongpassword"
+    },
+    "nonexistent": {
+      "email": "nonexistent@test.com",
+      "password": "anypassword"
+    },
+    "wrongPassword": {
+      "email": "user@test.com",
+      "password": "wrongpassword"
+    }
+  },
+  "validationTests": {
+    "invalidEmailFormat": "invalid-email",
+    "emptyEmail": "",
+    "emptyPassword": ""
+  }
+}

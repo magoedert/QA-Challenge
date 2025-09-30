@@ -5,10 +5,22 @@
   "scripts": {
     "start:dev": "node backend/server.js",
     "cy:open": "cypress open",
-    "test": "start-server-and-test start:dev http://localhost:3000 'cypress run'"
+    "cy:run": "cypress run",
+    "cy:run:chrome": "cypress run --browser chrome",
+    "cy:run:firefox": "cypress run --browser firefox",
+    "cy:run:headed": "cypress run --headed",
+    "cy:run:record": "cypress run --record",
+    "test": "start-server-and-test start:dev http://localhost:3000 'cypress run'",
+    "test:docker": "docker-compose up --build --abort-on-container-exit",
+    "test:docker:dev": "docker-compose --profile dev up --build",
+    "docker:cleanup": "docker-compose down -v --remove-orphans"
   },
   "devDependencies": {
-    "cypress": "^13.12.0",
-    "start-server-and-test": "^2.0.3"
+    "cypress": "^13.17.0",
+    "start-server-and-test": "^2.0.3",
+    "mochawesome": "^7.1.3",
+    "mochawesome-merge": "^4.3.0",
+    "mochawesome-report-generator": "^6.2.0",
+    "wait-on": "^7.2.0"
   }
 }

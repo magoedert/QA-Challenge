@@ -2,7 +2,7 @@
 
 ## 📋 Visão Geral
 
-Este projeto implementa uma **pipeline de testes robusta** para o Mini E-commerce usando **Cypress** e **Docker**, cobrindo todas as funcionalidades críticas da aplicação.
+Este projeto implementa uma pipeline de testes robusta para o Mini E-commerce usando **Cypress** e **Docker**, cobrindo todas as funcionalidades críticas da aplicação.
 
 ## 🎯 Funcionalidades Testadas
 

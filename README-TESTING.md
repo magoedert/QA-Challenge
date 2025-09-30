@@ -1,4 +1,4 @@
-# 🧪 Mini E-commerce - Pipeline de Testes Robusta
+# 🧪 Mini E-commerce - Pipeline de Testes
 
 ## 📋 Visão Geral
 

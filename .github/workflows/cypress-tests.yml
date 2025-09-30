@@ -150,7 +150,7 @@ jobs:
       matrix:
         browser: [chrome]  # Adicionar firefox e edge depois
         spec:
-          - 'cypress/e2e/Login/**/*'
+          - 'cypress/e2e/Testesweb/**/*'
           - 'cypress/e2e/API/**/*'
 
     steps:

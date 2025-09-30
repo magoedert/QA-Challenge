@@ -101,7 +101,7 @@ Os testes geram automaticamente:
 - 🎥 **Vídeos** de execução
 - 📸 **Screenshots** de falhas
 - 📊 **Relatórios HTML** detalhados
-- 📄 **Logs JSON** estruturados
+- 📄 **Logs JSON**
 
 ### Localização dos Arquivos
 ```

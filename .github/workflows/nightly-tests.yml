@@ -60,7 +60,6 @@ jobs:
       - name: Executar todos os testes
         uses: cypress-io/github-action@v6
         with:
-          build: npm run build
           start: npm run start:dev
           wait-on: 'http://localhost:3001'
           wait-on-timeout: 180

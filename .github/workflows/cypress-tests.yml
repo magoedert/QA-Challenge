@@ -44,7 +44,6 @@ jobs:
       - name: Executar Smoke Tests
         uses: cypress-io/github-action@v6
         with:
-          build: npm run build
           start: npm run start:dev
           wait-on: 'http://localhost:3001'
           wait-on-timeout: 120
@@ -107,7 +106,6 @@ jobs:
       - name: Executar testes E2E
         uses: cypress-io/github-action@v6
         with:
-          build: npm run build
           start: npm run start:dev
           wait-on: 'http://localhost:3001'
           wait-on-timeout: 120

@@ -127,7 +127,7 @@ jobs:
           config: viewportWidth=${{ matrix.viewport.width }},viewportHeight=${{ matrix.viewport.height }}
           spec: |
             cypress/e2e/Smoke/**/*,
-            cypress/e2e/Login/**/*,
+            cypress/e2e/Testesweb//**/*,
             cypress/e2e/API/**/*
         env:
           CYPRESS_RECORD_VIDEO: true

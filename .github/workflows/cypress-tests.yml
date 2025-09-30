@@ -159,14 +159,15 @@ jobs:
       - name: Executar testes com Docker
         run: |
           docker-compose up --build --abort-on-container-exit
-          docker-compose down
+          EXIT_CODE=$?
 
-      - name: Extract test results do container
-        run: |
-          docker-compose up --no-deps cypress
+          # Extract test results before shutting down
           docker cp $(docker-compose ps -q cypress):/e2e/cypress/videos ./cypress/videos || true
           docker cp $(docker-compose ps -q cypress):/e2e/cypress/screenshots ./cypress/screenshots || true
           docker cp $(docker-compose ps -q cypress):/e2e/cypress/reports ./cypress/reports || true
+
+          docker-compose down
+          exit $EXIT_CODE
 
       - name: Upload Docker test results
         uses: actions/upload-artifact@v4

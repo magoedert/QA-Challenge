@@ -44,7 +44,9 @@ jobs:
           cache: 'npm'
 
       - name: Instalar dependências
-        run: npm ci
+        run: |
+          npm ci
+          cd backend && npm ci
 
       - name: Criar arquivo de ambiente
         run: |

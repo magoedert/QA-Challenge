@@ -43,10 +43,10 @@ jobs:
           cache: 'npm'
 
       - name: Instalar dependências do frontend
-        run: npm ci
+        run: npm install
 
       - name: Instalar dependências do backend
-        run: cd backend && npm ci
+        run: cd backend && npm install
 
       - name: Criar arquivo de ambiente do Cypress
         run: |

@@ -19,7 +19,7 @@ on:
           - security
 
 env:
-  NODE_VERSION: '18'
+  NODE_VERSION: '20'
   DATABASE_URL: postgresql://testuser:testpass@localhost:5432/testdb
   JWT_SECRET: test-secret-key-for-ci-nightly
 

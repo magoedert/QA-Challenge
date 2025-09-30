@@ -165,7 +165,7 @@ jobs:
 
       - name: Instalar dependências
         run: |
-          npm ci
+          npm install
           cd backend && npm ci
 
       - name: Criar arquivo de ambiente do Cypress
